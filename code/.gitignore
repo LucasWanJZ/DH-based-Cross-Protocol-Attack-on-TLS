@@ -1,0 +1,31 @@
+# Ignore compiled binaries
+*.exe
+*.dll
+*.so
+
+# Ignore object files
+*.o
+
+# Ignore build artifacts
+build/
+dist/
+
+# Ignore IDE and editor files
+.vscode/
+.idea/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+*.pem
+
+
+# Ignore program
+private_files
+mitm
+tls_server
+tls_client
