@@ -11,6 +11,7 @@ int server_sock;
 int client_socket;
 
 unsigned char client_random[32];
+unsigned char server_random[32];
 unsigned char server_key_exchange[4096];
 unsigned char server_certificate[4096];
 unsigned char server_signature[4096];
@@ -24,6 +25,20 @@ size_t server_certificate_len = 0;
 size_t p_len = 0;
 size_t g_len = 0;
 size_t signature_data_len = 0;
+
+
+#define MASTER_SECRET_LENGTH 48
+#define FINISHED_MESSAGE_LENGTH 12
+#define PRE_MASTER_SECRET_LENGTH 48
+#define SEED_LENGTH 64
+
+
+unsigned char master_secret[MASTER_SECRET_LENGTH];
+unsigned char pre_master_secret[48] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
+};
 
 
 // Initialize OpenSSL
@@ -160,6 +175,58 @@ void print_buffer(const unsigned char *buf, size_t len) {
     printf("\n");
 }
 
+// TLS PRF using HMAC-SHA256
+void tls_prf(const unsigned char *secret, size_t secret_len, const char *label,
+             const unsigned char *seed, size_t seed_len, unsigned char *out, size_t out_len) {
+    unsigned char prf_buffer[EVP_MAX_MD_SIZE];
+    unsigned int prf_len;
+    size_t offset = 0;
+    size_t label_len = strlen(label);
+
+    HMAC_CTX *hmac_ctx = HMAC_CTX_new();
+    HMAC_CTX_reset(hmac_ctx);
+
+    while (offset < out_len) {
+        // A(i) = HMAC(secret, A(i-1))
+        HMAC_Init_ex(hmac_ctx, secret, secret_len, EVP_sha256(), NULL);
+        if (offset == 0) {
+            HMAC_Update(hmac_ctx, (unsigned char *)label, label_len);
+            HMAC_Update(hmac_ctx, seed, seed_len);
+        } else {
+            HMAC_Update(hmac_ctx, prf_buffer, prf_len);
+        }
+        HMAC_Final(hmac_ctx, prf_buffer, &prf_len);
+
+        // PRF output = HMAC(secret, A(i) + seed)
+        HMAC_Init_ex(hmac_ctx, secret, secret_len, EVP_sha256(), NULL);
+        HMAC_Update(hmac_ctx, prf_buffer, prf_len);
+        HMAC_Update(hmac_ctx, (unsigned char *)label, label_len);
+        HMAC_Update(hmac_ctx, seed, seed_len);
+        HMAC_Final(hmac_ctx, prf_buffer, &prf_len);
+
+        size_t copy_len = prf_len < (out_len - offset) ? prf_len : (out_len - offset);
+        memcpy(out + offset, prf_buffer, copy_len);
+        offset += copy_len;
+    }
+
+    HMAC_CTX_free(hmac_ctx);
+}
+
+void derive_master_secret(unsigned char *master_secret, const unsigned char *pre_master_secret,
+                          const unsigned char *client_random, const unsigned char *server_random) {
+    const char *label = "master secret";
+    unsigned char seed[SEED_LENGTH];
+
+    // Concatenate client random and server random to create the seed
+    memcpy(seed, client_random, 32);
+    memcpy(seed + 32, server_random, 32);
+
+    // Use the PRF to derive the master secret
+    tls_prf(pre_master_secret, PRE_MASTER_SECRET_LENGTH, label, seed, SEED_LENGTH, master_secret, MASTER_SECRET_LENGTH);
+    printf("Master Secret:\n");
+    print_buffer(master_secret, MASTER_SECRET_LENGTH);
+}
+
 // Message callback function to capture and print handshake messages
 void message_callback(int write_p, int version, int content_type, const void *buf, size_t len, SSL *ssl, void *arg) {
     const unsigned char *p = buf;
@@ -178,7 +245,7 @@ void message_callback(int write_p, int version, int content_type, const void *bu
             server_certificate_len = len;
         } else if (msg_type == SSL3_MT_SERVER_DONE) {
             close(server_sock);
-        }
+        } 
     }
 }
 
@@ -211,8 +278,6 @@ void intercept_and_relay(int client_sock, const char *server_host, int server_po
 
     // Initiate SSL handshake with the server
     if (SSL_connect(ssl) <= 0) {
-        
-        // After cutting the connection with server 
 
         // ServerHello message construction
         unsigned char prefix_sh[] = {0x16, 0x03, 0x03, 0x00, 0x39, 0x02, 0x00, 0x00, 0x35, 0x03, 0x03};
@@ -241,7 +306,7 @@ void intercept_and_relay(int client_sock, const char *server_host, int server_po
         unsigned char random[32];
         memcpy(random, gmt_unix_time, sizeof(gmt_unix_time));
         memcpy(random + sizeof(gmt_unix_time), random_bytes, sizeof(random_bytes));
-
+        memcpy(server_random, random, 32);
         unsigned char server_hello_end[] = {0x00, 0x00, 0x9e, 0x00, 0x00, 0x0d, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00, 0x17, 0x00, 0x00};
 
         // Construct the ServerHello message
@@ -312,8 +377,6 @@ void intercept_and_relay(int client_sock, const char *server_host, int server_po
         server_signature[64 + p_len + 87] = 0x01;
         server_signature[64 + p_len + 88] = 0x01;
         server_signature_len = 64 + p_len + 89;
-        print_buffer(server_signature, server_signature_len);
-        printf("Server Signature Length: %zu\n", server_signature_len);
         sign_data(pkey, server_signature, server_signature_len, server_signature, &server_signature_len);
 
         // Construct the signature data (Prefix)
@@ -362,10 +425,80 @@ void intercept_and_relay(int client_sock, const char *server_host, int server_po
         all_data_len += server_hello_done_len;
         write(client_sock, all_data, all_data_len);
 
-        //close(client_sock);
-        exit(EXIT_FAILURE);
-        SSL_free(ssl);
+        unsigned char client_response[4096];
+        int bytes_read = read(client_sock, client_response, sizeof(client_response));
+        if (bytes_read <= 0) {
+            close(client_sock);
+            exit(EXIT_FAILURE);
+        }
     }
+}
+
+void read_client_key_exchange(int client_sock) {
+    SSL_CTX *ctx = create_context();
+    SSL *ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, client_sock); 
+
+    unsigned char client_ke[4096];
+    unsigned char client_pke[4096];
+    unsigned char client_encryption[4096];
+    long bytes_read = read(client_sock, client_ke, sizeof(client_ke));
+    if (bytes_read <= 0) {
+        perror("Failed to read ClientKeyExchange");
+        close(client_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    memcpy(client_pke, client_ke + 11,304);
+    int pke_len = 304;
+
+    memcpy(client_encryption, client_ke + 326, 40);
+    int encryption_len = 40;
+
+    printf("Client Encrypted:\n");
+    print_buffer(client_encryption, encryption_len);
+        
+
+    // Construct NewSessionTicket message
+    unsigned char new_session_ticket[] = {
+        0x16, 0x03, 0x03,
+        0x00, 0xaa, // Length of the message
+        0x04,
+        0x00, 0x00, 0xa6, // Length of the ticket
+        0x00, 0x00, 0x1c, 0x20, // Session Ticket Lifetime Hint
+        0x00, 0xa0, // Session Ticket Length
+        0x8c, 0xa4, 0x9b, 0x76, 0x83, 0x26, 0x02, 0x6a, 0x94, 0xc8, 0x47, 0x32, 0xc8, 0x74, 0x57, 0xf1,
+        0x5f, 0x2c, 0x5f, 0x3c, 0x9c, 0x0f, 0x91, 0x14, 0xbc, 0xc2, 0x0f, 0x6e, 0x87, 0xcb, 0x80, 0x34,
+        0x34, 0x9e, 0xcc, 0x10, 0xcd, 0x3c, 0x72, 0x1e, 0x72, 0x41, 0x63, 0x06, 0xea, 0x1a, 0x86, 0x3e,
+        0xdc, 0xf2, 0x48, 0x94, 0x8f, 0x0f, 0xef, 0x2f, 0x74, 0xfc, 0x70, 0x86, 0xeb, 0x08, 0xaa, 0xc1,
+        0xef, 0x6c, 0x49, 0x2b, 0x67, 0x6b, 0x54, 0xc7, 0xfd, 0x0c, 0x55, 0x08, 0xe4, 0x6a, 0xd1, 0x84,
+        0xbf, 0x73, 0x27, 0x4a, 0x13, 0x13, 0xa3, 0x5b, 0x7d, 0xe5, 0x44, 0xd3, 0xac, 0x30, 0xa5, 0x90,
+        0x68, 0xfe, 0x33, 0xac, 0x1a, 0x9f, 0x95, 0xc2, 0xce, 0xb4, 0xbc, 0x55, 0x75, 0x65, 0x14, 0x46,
+        0x69, 0x14, 0x9f, 0x96, 0xc8, 0x13, 0x03, 0xd0, 0xf0, 0x30, 0x83, 0xd1, 0x92, 0x16, 0xfc, 0x0b,
+        0x58, 0xa3, 0x0c, 0x21, 0xe4, 0x5f, 0x5d, 0x1e, 0x06, 0x1f, 0xa3, 0x7e, 0x6c, 0x11, 0x8b, 0xde,
+        0x29, 0x58, 0x59, 0xff, 0x89, 0x87, 0x78, 0x53, 0x02, 0xe8, 0xd7, 0xe2, 0x03, 0xa4, 0xf0, 0xc8  // Session Ticket
+    };
+
+    // Construct ChangeCipherSpec message
+    unsigned char change_cipher_spec[] = {
+        0x14, 0x03, 0x03, 0x00, 0x01, 0x01
+    };
+
+    // Construct Encrypted Handshake message
+    unsigned char encrypted_handshake[] = {
+        0x16, 0x03, 0x03, 
+        0x00, 0x28, // Length of the message
+    };
+
+    derive_master_secret(master_secret, pre_master_secret, client_random, server_random);
+
+    unsigned char server_finished[4096];
+    memcpy(server_finished, new_session_ticket, 175);
+    memcpy(server_finished + 175, change_cipher_spec, 6);
+    memcpy(server_finished + 181, encrypted_handshake, 5);
+    memcpy(server_finished + 186, client_encryption, encryption_len);
+
+    write(client_sock, server_finished, 226);
 }
 
 int create_socket(const char *host, int port) {
@@ -422,10 +555,9 @@ int main(int argc, char **argv) {
             cleanup_openssl();
             exit(EXIT_FAILURE);
         }
-
         intercept_and_relay(client_sock, host, server_port); 
+        read_client_key_exchange(client_sock);
     }
-
     close(server_sock);
     cleanup_openssl();
 

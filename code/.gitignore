@@ -29,3 +29,4 @@ private_files
 mitm
 tls_server
 tls_client
+*.py
