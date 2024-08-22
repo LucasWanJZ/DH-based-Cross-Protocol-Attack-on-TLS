@@ -83,7 +83,7 @@
 
         initialize_openssl();
         SSL_CTX *ctx = create_context();
-        if (SSL_CTX_set_cipher_list(ctx,"DHE-RSA-AES128-GCM-SHA256") <= 0) {
+        if (SSL_CTX_set_cipher_list(ctx,"DHE-RSA-AES128-SHA256") <= 0) {
             ERR_print_errors_fp(stderr);
             exit(EXIT_FAILURE);
         }

@@ -25,25 +25,13 @@ def find_private_key_with_specific_public_end(existing_key):
         )
 
 
-        ninth = public_key[8]
-        tenth = public_key[9]
-        combined = (ninth << 8) + tenth
+        eleventh = public_key[20]
+        twelve = public_key[21]
+        combined = (eleventh << 8) + twelve
         count+=1
         print("Tries: ",count)
-        cb = 0
 
-        try: 
-            pk_len1 = public_key[10+combined]
-            pk_len2 = public_key[11+combined]
-            cb = (pk_len1 << 8) + pk_len2
-        except:
-            continue
-
-        threshold = 85 - combined
-        print("Threshold: ", threshold)
-        if cb > 0:
-            print("Length of public key: ", cb) 
-        if combined <= 84 and cb == threshold:
+        if combined == 75 :
             return private_key, public_key
         
 
