@@ -25,16 +25,15 @@ def find_private_key_with_specific_public_end(existing_key):
         )
 
 
-        eleventh = public_key[20]
-        twelve = public_key[21]
+        eleventh = public_key[6]
+        twelve = public_key[7]
         combined = (eleventh << 8) + twelve
         count+=1
         print("Tries: ",count)
 
-        if combined == 75 :
+        if combined == 86 :
             return private_key, public_key
         
-
 
 existing_key = set()
 
