@@ -62,30 +62,6 @@
             exit(EXIT_FAILURE);
         }
 
-        // Load DH parameters
-        DH *dh = NULL;
-        FILE *dh_params = fopen("private_files/dhparam.pem", "r");
-        if (dh_params) {
-            dh = PEM_read_DHparams(dh_params, NULL, NULL, NULL);
-            fclose(dh_params);
-        } else {
-            perror("Unable to open DH parameters file");
-            exit(EXIT_FAILURE);
-        }
-
-        if (dh == NULL) {
-            perror("Unable to read DH parameters");
-            ERR_print_errors_fp(stderr);
-            exit(EXIT_FAILURE);
-        }
-
-        if (SSL_CTX_set_tmp_dh(ctx, dh) <= 0) {
-            perror("Unable to set DH parameters");
-            ERR_print_errors_fp(stderr);
-            exit(EXIT_FAILURE);
-        }
-
-        DH_free(dh);
     }
 
     // Create a socket and bind to the host and port
