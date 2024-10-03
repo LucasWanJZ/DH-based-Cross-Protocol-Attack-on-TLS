@@ -1,12 +1,16 @@
 # DH-based Cross-Protocol Attack on TLS
 
-This repository demonstrates a cross-protocol attack on TLS exploiting a Diffie-Hellman (DH) parameter weakness.
+This repository demonstrates a cross-protocol attack on TLS exploiting a Diffie-Hellman (DH) parameter weakness. 
 
 # Requirements:
 
-    OpenSSL 1.1.1 (compiled from source)
+    OpenSSL 1.1.1 (has been modified to demonstrate this attack efficiently)
     GCC compiler
     Wireshark for network traffic analysis
+
+    OpenSSL modification :
+    - Server uses fixed private key 
+    - Client accept 1 as the value of plain DH public key 
 
 # How it Works:
 
@@ -64,7 +68,8 @@ Replace <host> with the desired hostname for the server (seen from the client's 
 
 ## Observe Network Traffic:
 
-  Use Wireshark to capture network traffic while running the programs. You should see communication between the client and the server intercepted by the MitM.
+  Use Wireshark to capture network traffic while running the programs. You should see communication between the client and the server intercepted by the MitM. You may also observe that 
+  the client has successfully misinterpreted signed ECDHE parameters from the server as valid plain DHE parameters.
 
 ## Disclaimer:
 
