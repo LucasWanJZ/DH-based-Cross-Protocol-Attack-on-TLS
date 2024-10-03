@@ -9,22 +9,22 @@
     #include <openssl/sha.h>
     #include "helper.h"
 
-    // void print_buffer(const unsigned char *buf, size_t len) {
-    //     if (buf == NULL || len == 0) {
-    //         printf("Buffer is NULL or empty\n");
-    //         return;
-    //     }
+    void print_buffer(const unsigned char *buf, size_t len) {
+        if (buf == NULL || len == 0) {
+            printf("Buffer is NULL or empty\n");
+            return;
+        }
 
-    //     for (size_t i = 0; i < len; i++) {
-    //         printf("%02x ", buf[i]);
+        for (size_t i = 0; i < len; i++) {
+            printf("%02x ", buf[i]);
             
-    //         // Optional: Print a newline every 16 bytes for better readability
-    //         if ((i + 1) % 16 == 0) {
-    //             printf("\n");
-    //         }
-    //     }
-    //     printf("\n");
-    // }
+            // Optional: Print a newline every 16 bytes for better readability
+            if ((i + 1) % 16 == 0) {
+                printf("\n");
+            }
+        }
+        printf("\n");
+    }
 
 
     // Initialize OpenSSL
@@ -226,13 +226,7 @@
 
         // Use the PRF to derive the master secret
         tls_prf_test(pms, pms_len, label, seed, 64, master_secret, master_secret_length);
-        printf("Master Secret (with client) :\n");
-        for (int i = 0; i < 48; i++) {
-            printf("%02x ", master_secret[i]);
-            if ((i + 1) % 16 == 0) {
-                printf("\n");
-            }
-        }
+        
         return 1;
     }
 
@@ -415,34 +409,6 @@
         }
     }
 
-    void generate_verify_data(
-    const unsigned char* master_secret, size_t master_secret_len,
-    const unsigned char* seed, size_t seed_len,
-    unsigned char* verify_data, size_t verify_data_len) {
-        
-    // HMAC context
-    unsigned char a1[SHA256_DIGEST_LENGTH];
-    unsigned char p1[SHA256_DIGEST_LENGTH];
-    unsigned int len = 0;
-
-    // Step 1: Compute a1 = HMAC_SHA256(master_secret, seed)
-    HMAC_CTX* hmac_ctx = HMAC_CTX_new();
-    HMAC_Init_ex(hmac_ctx, master_secret, master_secret_len, EVP_sha256(), NULL);
-    HMAC_Update(hmac_ctx, seed, seed_len);
-    HMAC_Final(hmac_ctx, a1, &len);
-
-    // Step 2: Compute p1 = HMAC_SHA256(master_secret, a1 + seed)
-    HMAC_Init_ex(hmac_ctx, master_secret, master_secret_len, EVP_sha256(), NULL);
-    HMAC_Update(hmac_ctx, a1, len);
-    HMAC_Update(hmac_ctx, seed, seed_len);
-    HMAC_Final(hmac_ctx, p1, &len);
-
-    // Copy the first 12 bytes of p1 to verify_data
-    memcpy(verify_data, p1, verify_data_len);
-    // Clean up
-    HMAC_CTX_free(hmac_ctx);
-    }
-
     void read_client_key_exchange(int client_sock) {
         SSL_CTX *ctx = create_context();
         SSL *ssl = SSL_new(ctx);
@@ -458,72 +424,7 @@
             exit(EXIT_FAILURE);
         }
 
-        memcpy(client_pke, client_ke + 11,304);
-        int pke_len = 304;
-
-        memcpy(client_ct, client_ke + 326, 80);
-
-        unsigned char combined_payload[4096];
-        size_t combined_length = 0;
-
-        memcpy(combined_payload, client_hello+5, 113);
-        combined_length += 113;
-        memcpy(combined_payload + combined_length, server_hello + 5, 57);
-        combined_length += 57;
-        memcpy(combined_payload + combined_length, server_certificate, server_certificate_len);
-        combined_length += server_certificate_len;
-        memcpy(combined_payload + combined_length, modified_server_key_exchange + 5, modified_server_key_exchange_len - 5);
-        combined_length += modified_server_key_exchange_len - 5;
-        memcpy(combined_payload + combined_length, server_hello_done + 5, 4);
-        combined_length += 4;
-        memcpy(combined_payload + combined_length, client_ke + 5, 310);
-        combined_length += 310;
-
-        unsigned char hash[SHA256_DIGEST_LENGTH];
-        SHA256(combined_payload, combined_length, hash);
-
         derive_master_secret(master_secret, MASTER_SECRET_LENGTH, pre_master_secret, PRE_MASTER_SECRET_LENGTH, client_random, server_random);
-    
-        unsigned char verify_data[12];
-        unsigned char seed[64];
-        memcpy(seed, "client finished", 15);
-        memcpy(seed + 15, hash, 32);
-        generate_verify_data(master_secret, MASTER_SECRET_LENGTH, seed, 47, verify_data, 12);
-        
-        // Construct Client Finished message
-        unsigned char client_finished[4096];
-        memcpy(client_finished, client_random, 16);
-        memcpy(client_finished + 16, header, 4);
-        memcpy(client_finished + 20, verify_data, 12);
-        unsigned char server_fin[4096];
-        memcpy(server_fin, combined_payload, combined_length);
-        memcpy(server_fin + combined_length, verify_data, 12);
-        
-        unsigned char hash2[SHA256_DIGEST_LENGTH];
-        SHA256(server_fin, combined_length + 12, hash2);
-        
-        unsigned char verify_data2[12];
-        unsigned char seed2[64]; 
-        memcpy(seed2, "server finished", 15); 
-        memcpy(seed2 + 15, hash2, 32);
-        generate_verify_data(master_secret, MASTER_SECRET_LENGTH, seed2, 47, verify_data2, 12);
-        // Construct Finished message
-        unsigned char server_ct[4096];
-        memcpy(server_ct, server_random, 16);
-        memcpy(server_ct + 16, header2, 4);
-        memcpy(server_ct + 20, verify_data2, 12);
-        for (int i = 32; i < 79; i++) {
-            server_ct[i] = 0x00;
-        }
-        server_ct[79] = 0x01;
-
-        unsigned char server_finished[4096];
-        memcpy(server_finished, new_session_ticket, 175);
-        memcpy(server_finished + 175, change_cipher_spec, 6);
-        memcpy(server_finished + 181, encrypted_handshake_prefix, 5);
-        memcpy(server_finished + 186, server_ct, 80);
-
-        write(client_sock, server_finished, 186 + 80);
     }
 
     int create_socket(const char *host, int port) {
